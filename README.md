@@ -1,3 +1,3 @@
 # FlyingDutchman
 Secure file transfer application using webrtc
-![alt text](ressources/images/FlyingDutchman.svg)
+![Flying Dutchman Vector](ressources/images/FlyingDutchman.svg)
