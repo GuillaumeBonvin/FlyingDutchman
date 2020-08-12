@@ -2,20 +2,25 @@ package main
 
 import (
 	"FlyingDutchman/internal"
+	"encoding/json"
 	"fmt"
 	"github.com/pion/webrtc/v3"
+	"github.com/sacOO7/gowebsocket"
 	"io/ioutil"
+	"log"
+	"os"
+	"os/signal"
 )
 
 func Sender(filePath string) {
-	// Everything below is the Pion WebRTC API! Thanks for using it ❤️.
 
 	// Prepare the configuration
 	config := webrtc.Configuration{
 		ICEServers: []webrtc.ICEServer{
 			{
-				URLs: []string{"stun:stun.flying-dut.ch:5349"},
-			},
+				URLs:       []string{"turn:turn.flying-dut.ch:3478", "stun:stun.flying-dut.ch:3478"},
+				Username:   "captain",
+				Credential: "Axp2oSr56d5"},
 		},
 	}
 
@@ -39,18 +44,7 @@ func Sender(filePath string) {
 
 	// Register channel opening handling
 	dataChannel.OnOpen(func() {
-		fmt.Printf("Data channel '%s'-'%d' open. Random messages will now be sent to any connected DataChannels every 5 seconds\n", dataChannel.Label(), dataChannel.ID())
-
-		/*for range time.NewTicker(5 * time.Second).C {
-			message := internal.RandSeq(15)
-			fmt.Printf("Sending '%s'\n", message)
-
-			// Send the message as text
-			sendErr := dataChannel.SendText(message)
-			if sendErr != nil {
-				panic(sendErr)
-			}
-		}*/
+		fmt.Printf("Data channel '%s'-'%d' open.\n", dataChannel.Label(), dataChannel.ID())
 
 		// Convert file to byte array
 		file, err := ioutil.ReadFile(filePath)
@@ -76,39 +70,172 @@ func Sender(filePath string) {
 		fmt.Printf("Message from DataChannel '%s': '%s'\n", dataChannel.Label(), string(msg.Data))
 	})
 
-	// Create an offer to send to the browser
-	offer, err := peerConnection.CreateOffer(nil)
-	if err != nil {
-		panic(err)
+	/////// START OF WS SIGNALING ///////////
+
+	type Message struct {
+		Type    string
+		Success bool
+		Offer   string
+		Answer  string
+		Name    string
+		Sender  string
 	}
 
-	// Create channel that is blocked until ICE Gathering is complete
-	gatherComplete := webrtc.GatheringCompletePromise(peerConnection)
+	var name string
+	fmt.Println("Enter your name:")
+	fmt.Scanln(&name)
 
-	// Sets the LocalDescription, and starts our UDP listeners
-	err = peerConnection.SetLocalDescription(offer)
-	if err != nil {
-		panic(err)
+	var remote string
+	fmt.Println("Enter who you want to send to:")
+	fmt.Scanln(&remote)
+
+	interrupt := make(chan os.Signal, 1)
+	signal.Notify(interrupt, os.Interrupt)
+
+	socket := gowebsocket.New("ws://signal.flying-dut.ch:9090")
+
+	socket.OnConnected = func(socket gowebsocket.Socket) {
+		log.Println("Connected to server")
+
+		ans := Message{Type: "login", Name: name}
+		b, err := json.Marshal(ans)
+		if err != nil {
+			panic(err)
+		}
+		socket.SendBinary(b)
 	}
 
-	// Block until ICE Gathering is complete, disabling trickle ICE
-	// we do this because we only can exchange one signaling message
-	// in a production application you should exchange ICE Candidates via OnICECandidate
-	<-gatherComplete
-
-	// Output the answer in base64 so we can paste it in browser
-	fmt.Println(internal.Encode(*peerConnection.LocalDescription()))
-
-	// Wait for the answer to be pasted
-	answer := webrtc.SessionDescription{}
-	internal.Decode(internal.MustReadStdin(), &answer)
-
-	// Apply the answer as the remote description
-	err = peerConnection.SetRemoteDescription(answer)
-	if err != nil {
-		panic(err)
+	socket.OnConnectError = func(err error, socket gowebsocket.Socket) {
+		log.Println("Recieved connect error ", err)
 	}
 
-	// Block forever
-	select {}
+	socket.OnTextMessage = func(message string, socket gowebsocket.Socket) {
+		//log.Println("Recieved message " + message)
+		var m Message
+
+		err := json.Unmarshal([]byte(message), &m)
+		if err != nil {
+			panic(err)
+		}
+		switch m.Type {
+		case "login":
+			if m.Success == true {
+				log.Println("Login success")
+
+				offer, err := peerConnection.CreateOffer(nil)
+
+				gatherComplete := webrtc.GatheringCompletePromise(peerConnection)
+
+				err = peerConnection.SetLocalDescription(offer)
+				if err != nil {
+					panic(err)
+				}
+				<-gatherComplete
+
+				// Output the answer in base64 so we can paste it in browser
+				encodedOffer := internal.Encode(*peerConnection.LocalDescription())
+
+				ans := Message{Type: "offer", Name: remote, Offer: encodedOffer, Sender: name}
+				b, err := json.Marshal(ans)
+				if err != nil {
+					panic(err)
+				}
+				socket.SendBinary(b)
+
+				log.Println("Sending offer to " + remote)
+			} else {
+				log.Println("Login failed")
+			}
+
+		case "noMatch", "reject":
+
+			if m.Type == "noMatch" {
+				fmt.Println("Couldn't find user named " + remote)
+			} else {
+				fmt.Println("User " + remote + " rejected you offer")
+			}
+
+			fmt.Println("Please enter new name or type 'r' to retry")
+			var userInput string
+			fmt.Scanln(&userInput)
+			if userInput != "r" {
+				remote = userInput
+			}
+
+			offer, err := peerConnection.CreateOffer(nil)
+
+			gatherComplete := webrtc.GatheringCompletePromise(peerConnection)
+
+			err = peerConnection.SetLocalDescription(offer)
+			if err != nil {
+				panic(err)
+			}
+			<-gatherComplete
+
+			// Output the answer in base64 so we can paste it in browser
+			encodedOffer := internal.Encode(*peerConnection.LocalDescription())
+
+			ans := Message{Type: "offer", Name: remote, Offer: encodedOffer, Sender: name}
+			b, err := json.Marshal(ans)
+			if err != nil {
+				panic(err)
+			}
+			socket.SendBinary(b)
+
+			log.Println("Sending offer to " + remote)
+
+		case "answer":
+			log.Println("Received answer from " + remote)
+			var encodedAnswer = m.Answer
+
+			answer := webrtc.SessionDescription{}
+
+			internal.Decode(encodedAnswer, &answer)
+
+			err = peerConnection.SetRemoteDescription(answer)
+			if err != nil {
+				panic(err)
+			}
+
+		case "leave":
+			/*ans := Message{Type: "leave", Name: remote}
+			b, err := json.Marshal(ans)
+			if err != nil {
+				panic(err)
+			}
+			socket.SendBinary(b)*/
+
+			socket.Close()
+		}
+	}
+
+	socket.OnBinaryMessage = func(data []byte, socket gowebsocket.Socket) {
+		log.Println("Recieved binary data ", data)
+	}
+
+	socket.OnPingReceived = func(data string, socket gowebsocket.Socket) {
+		log.Println("Recieved ping " + data)
+	}
+
+	socket.OnPongReceived = func(data string, socket gowebsocket.Socket) {
+		log.Println("Recieved pong " + data)
+	}
+
+	socket.OnDisconnected = func(err error, socket gowebsocket.Socket) {
+		log.Println("Disconnected from server ")
+		return
+	}
+
+	socket.Connect()
+
+	for {
+		select {
+		case <-interrupt:
+			log.Println("interrupt")
+			socket.Close()
+			return
+		}
+	}
+	/////// END OF WS SIGNALING ///////////
+
 }

@@ -5,11 +5,13 @@ import (
 )
 
 func main() {
-	fmt.Println("Welcome to the Flying Dutchman!\nAre you sender or receiver of the file? ('s'/'r')")
+	fmt.Println("Something appears out of the deep sea... The Flying Dutchman!")
 	var userResponse string
 	var userStateDefined = false
+	var userIsDone = false
 
-	for !userStateDefined {
+	for !userStateDefined && !userIsDone {
+		fmt.Println("Are you sender or receiver of the file? ('s'/'r')\nYou can stop the program by typing quit ('q')")
 		fmt.Scanln(&userResponse)
 
 		switch userResponse {
@@ -25,11 +27,15 @@ func main() {
 			var outpath string
 			fmt.Scanln(&outpath)
 			Receiver(outpath)
-		case "t", "test":
+		case "q", "quit":
+			userStateDefined = true
+			userIsDone = true
+			break
 
 		default:
 			fmt.Printf("Sorry, \"%s\" is not a functionnal command, please try again:\n", userResponse)
 		}
 	}
+	fmt.Println("The glowing boat disappeared in the mist...")
 
 }
