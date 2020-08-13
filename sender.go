@@ -12,7 +12,7 @@ import (
 	"os/signal"
 )
 
-func Sender(filePath string) {
+func Sender() {
 
 	// Prepare the configuration
 	config := webrtc.Configuration{
@@ -39,38 +39,130 @@ func Sender(filePath string) {
 	// Set the handler for ICE connection state
 	// This will notify you when the peer has connected/disconnected
 	peerConnection.OnICEConnectionStateChange(func(connectionState webrtc.ICEConnectionState) {
-		fmt.Printf("ICE Connection State has changed: %s\n", connectionState.String())
+		log.Printf("ICE Connection State has changed: %s\n", connectionState.String())
 	})
+
+	////////////////////////////////////////// FILE EXCHANGE PROTOCOL //////////////////////////////////////////////////
+
+	type Exchange struct {
+		Type     string
+		FileName string
+		FileSize int64
+		Hash     []byte
+		Data     []byte
+	}
+
+	var filePath string
+	var file []byte
+	var fileStats os.FileInfo
 
 	// Register channel opening handling
 	dataChannel.OnOpen(func() {
-		fmt.Printf("Data channel '%s'-'%d' open.\n", dataChannel.Label(), dataChannel.ID())
+		log.Printf("Data channel '%s'-'%d' open.\n", dataChannel.Label(), dataChannel.ID())
 
-		// Convert file to byte array
-		file, err := ioutil.ReadFile(filePath)
-		if err != nil {
-			panic(err)
-		}
+		/*
+			limit := 32
 
-		limit := 32
+			for i := 0; i < len(file); i += limit {
+				batch := file[i:internal.Min(i+limit, len(file))]
 
-		for i := 0; i < len(file); i += limit {
-			batch := file[i:internal.Min(i+limit, len(file))]
-
-			sendErr := dataChannel.Send(batch)
-			if sendErr != nil {
-				panic(sendErr)
-			}
-		}
+				sendErr := dataChannel.Send(batch)
+				if sendErr != nil {
+					panic(sendErr)
+				}
+			}*/
 
 	})
 
 	// Register text message handling
 	dataChannel.OnMessage(func(msg webrtc.DataChannelMessage) {
-		fmt.Printf("Message from DataChannel '%s': '%s'\n", dataChannel.Label(), string(msg.Data))
+		//fmt.Printf("Message from DataChannel '%s': '%s'\n", dataChannel.Label(), string(msg.Data))
+
+		var m Exchange
+
+		err := json.Unmarshal(msg.Data, &m)
+		if err != nil {
+			panic(err)
+		}
+		switch m.Type {
+		case "ready":
+			fmt.Println("Receiver is ready for a file offer, please enter file path and name:\n" +
+				"Example - somefolder/image.png")
+			var userInput string
+			fmt.Scanln(&userInput)
+			if userInput == "q" { //send leave message
+			} else {
+				filePath = userInput
+				fileStats, err = os.Stat(filePath)
+				if err != nil {
+					log.Fatal("err")
+				}
+				// Convert file to byte array
+				file, err = ioutil.ReadFile(filePath)
+				if err != nil {
+					panic(err)
+				}
+				fileHash := internal.CreateHash(file)
+
+				// Send all file infos
+				msg := Exchange{Type: "fileInfo", FileName: fileStats.Name(), FileSize: fileStats.Size(), Hash: fileHash}
+				m, err := json.Marshal(msg)
+				if err != nil {
+					panic(err)
+				}
+				sendErr := dataChannel.Send(m)
+				if sendErr != nil {
+					panic(sendErr)
+				}
+			}
+		case "accept":
+			fmt.Println("File offer accepted! Your file is being sent...")
+			log.Println("Uploading")
+
+			limit := 45000
+			for i := 0; i < len(file); i += limit {
+				batch := file[i:internal.Min(i+limit, len(file))]
+
+				msg := Exchange{Type: "fileChunk", Data: batch}
+				m, err := json.Marshal(msg)
+				if err != nil {
+					panic(err)
+				}
+				sendErr := dataChannel.Send(m)
+				if sendErr != nil {
+					panic(sendErr)
+				}
+				if i%2000000 == 0 {
+					fmt.Print("|")
+					msg := Exchange{Type: "mega"}
+					m, err := json.Marshal(msg)
+					if err != nil {
+						panic(err)
+					}
+					sendErr := dataChannel.Send(m)
+					if sendErr != nil {
+						panic(sendErr)
+					}
+				}
+			}
+			fmt.Println(" -->Upload done\nWaiting for confirmation...")
+			msg := Exchange{Type: "fileComplete"}
+			m, err := json.Marshal(msg)
+			if err != nil {
+				panic(err)
+			}
+			sendErr := dataChannel.Send(m)
+			if sendErr != nil {
+				panic(sendErr)
+			}
+		case "received":
+			fmt.Println("File has been received successfully!")
+
+		}
+
 	})
 
-	/////// START OF WS SIGNALING ///////////
+	//////////////////////////////////////////// WEBSOCKET SIGNALING ///////////////////////////////////////////////////
 
 	type Message struct {
 		Type    string
@@ -92,6 +184,7 @@ func Sender(filePath string) {
 	interrupt := make(chan os.Signal, 1)
 	signal.Notify(interrupt, os.Interrupt)
 
+	//socket := gowebsocket.New("ws://127.0.0.1:9090")
 	socket := gowebsocket.New("ws://signal.flying-dut.ch:9090")
 
 	socket.OnConnected = func(socket gowebsocket.Socket) {
@@ -236,6 +329,4 @@ func Sender(filePath string) {
 			return
 		}
 	}
-	/////// END OF WS SIGNALING ///////////
-
 }

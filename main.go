@@ -17,16 +17,12 @@ func main() {
 		switch userResponse {
 		case "s", "send":
 			userStateDefined = true
-			fmt.Println("Preparing to send...\n Please enter file path:")
-			var filepath string
-			fmt.Scanln(&filepath)
-			Sender(filepath)
+			fmt.Println("Preparing to send...")
+			Sender()
 		case "r", "receive":
 			userStateDefined = true
-			fmt.Println("Preparing to receive...\n Please indicate output path:")
-			var outpath string
-			fmt.Scanln(&outpath)
-			Receiver(outpath)
+			fmt.Println("Preparing to receive...")
+			Receiver()
 		case "q", "quit":
 			userStateDefined = true
 			userIsDone = true

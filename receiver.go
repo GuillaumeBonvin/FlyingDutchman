@@ -2,6 +2,7 @@ package main
 
 import (
 	"FlyingDutchman/internal"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"github.com/pion/webrtc/v3"
@@ -12,9 +13,8 @@ import (
 	"os/signal"
 )
 
-func Receiver(outputPath string) {
-	// Everything below is the Pion WebRTC API! Thanks for using it ❤️.
-	fmt.Println("enter remote sdp:")
+func Receiver() {
+
 	// Prepare the configuration
 	config := webrtc.Configuration{
 		ICEServers: []webrtc.ICEServer{
@@ -35,37 +35,124 @@ func Receiver(outputPath string) {
 	// Set the handler for ICE connection state
 	// This will notify you when the peer has connected/disconnected
 	peerConnection.OnICEConnectionStateChange(func(connectionState webrtc.ICEConnectionState) {
-		fmt.Printf("ICE Connection State has changed: %s\n", connectionState.String())
+		log.Printf("ICE Connection State has changed: %s\n", connectionState.String())
 	})
 
+	////////////////////////////////////////// FILE EXCHANGE PROTOCOL //////////////////////////////////////////////////
+
+	type Exchange struct {
+		Type     string
+		FileName string
+		FileSize int64
+		Hash     []byte
+		Data     []byte
+	}
+
+	var outputPath string
+	var fileHash []byte
+
 	// Register data channel creation handling
-	peerConnection.OnDataChannel(func(d *webrtc.DataChannel) {
-		fmt.Printf("New DataChannel %s %d\n", d.Label(), d.ID())
+	peerConnection.OnDataChannel(func(dataChannel *webrtc.DataChannel) {
+		log.Printf("New DataChannel %s %dataChannel\n", dataChannel.Label(), dataChannel.ID())
 
 		// Register channel opening handling
-		d.OnOpen(func() {
-			fmt.Printf("Data channel '%s'-'%d' open.\n", d.Label(), d.ID())
+		dataChannel.OnOpen(func() {
+			log.Printf("Data channel '%s'-'%dataChannel' open.\n", dataChannel.Label(), dataChannel.ID())
 
+			// Notify sender we are ready to receive a file offer
+			msg := Exchange{Type: "ready"}
+			m, err := json.Marshal(msg)
+			if err != nil {
+				panic(err)
+			}
+			sendErr := dataChannel.Send(m)
+			if sendErr != nil {
+				panic(sendErr)
+			}
 		})
 
 		// Register text message handling
 		rebuiltFile := []byte{}
 
-		d.OnMessage(func(msg webrtc.DataChannelMessage) {
-			//fmt.Printf("Message from DataChannel '%s': '%s'\n", d.Label(), string(msg.Data))
-			//fmt.Println("file received!")
+		dataChannel.OnMessage(func(msg webrtc.DataChannelMessage) {
+			//fmt.Printf("Message from DataChannel '%s': '%s'\n", dataChannel.Label(), string(msg.Data))
 
-			rebuiltFile = append(rebuiltFile, msg.Data[:]...)
+			var m Exchange
 
-			// Convert byte array to file
-			err := ioutil.WriteFile(outputPath, rebuiltFile, 0644)
+			err := json.Unmarshal(msg.Data, &m)
 			if err != nil {
 				panic(err)
 			}
+			switch m.Type {
+			case "fileInfo":
+				fmt.Println("Received a file offer:\nName: " + m.FileName + "\nSize: " + string(m.FileSize))
+				var userResponse string
+				fmt.Println("Type 'yes' to accept offer:")
+				fmt.Scanln(&userResponse)
+				if userResponse == "yes" {
+					log.Println("downloading")
+
+					outputPath = "out/" + m.FileName
+					fileHash = m.Hash
+
+					msg := Exchange{Type: "accept"}
+					m, err := json.Marshal(msg)
+					if err != nil {
+						panic(err)
+					}
+					sendErr := dataChannel.Send(m)
+					if sendErr != nil {
+						panic(sendErr)
+					}
+				} else {
+					msg := Exchange{Type: "reject"}
+					m, err := json.Marshal(msg)
+					if err != nil {
+						panic(err)
+					}
+					sendErr := dataChannel.Send(m)
+					if sendErr != nil {
+						panic(sendErr)
+					}
+				}
+			case "fileChunk":
+				rebuiltFile = append(rebuiltFile, m.Data[:]...)
+			case "mega":
+				fmt.Print("|")
+			case "fileComplete":
+				fmt.Println(" -->Download done")
+				log.Println("Integrity check")
+				if bytes.Equal(fileHash, internal.CreateHash(rebuiltFile)) {
+					fmt.Println("File integrity confirmed! Saving file...")
+
+					err = ioutil.WriteFile(outputPath, rebuiltFile, 0644)
+					if err != nil {
+						panic(err)
+					}
+
+					msg := Exchange{Type: "received"}
+					m, err := json.Marshal(msg)
+					if err != nil {
+						panic(err)
+					}
+					sendErr := dataChannel.Send(m)
+					if sendErr != nil {
+						panic(sendErr)
+					}
+				}
+
+			}
+			/*rebuiltFile = append(rebuiltFile, msg.Data[:]...)
+
+			// Convert byte array to file
+			err = ioutil.WriteFile(outputPath, rebuiltFile, 0644)
+			if err != nil {
+				panic(err)
+			}*/
 		})
 	})
 
-	/////// START OF WS SIGNALING ///////////
+	//////////////////////////////////////////// WEBSOCKET SIGNALING ///////////////////////////////////////////////////
 
 	type Message struct {
 		Type    string
@@ -85,6 +172,7 @@ func Receiver(outputPath string) {
 	interrupt := make(chan os.Signal, 1)
 	signal.Notify(interrupt, os.Interrupt)
 
+	//socket := gowebsocket.New("ws://127.0.0.1:9090")
 	socket := gowebsocket.New("ws://signal.flying-dut.ch:9090")
 
 	socket.OnConnected = func(socket gowebsocket.Socket) {
@@ -229,6 +317,4 @@ func Receiver(outputPath string) {
 			return
 		}
 	}
-	/////// END OF WS SIGNALING ///////////
-
 }
