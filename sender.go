@@ -11,6 +11,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"time"
 )
 
 func Sender() {
@@ -127,7 +128,13 @@ func Sender() {
 				if sendErr != nil {
 					panic(sendErr)
 				}
-				if i%2000000 == 0 {
+
+				chunks := len(file) / limit
+				if chunks < 100 {
+					chunks = 100
+				}
+
+				if (i/limit)%(chunks/100) == 0 && i != 0 {
 					fmt.Print("|")
 					msg := Exchange{Type: "mega"}
 					m, err := json.Marshal(msg)
@@ -153,7 +160,10 @@ func Sender() {
 		case "received":
 			fmt.Println("File has been received successfully!")
 
+			time.Sleep(50000 * time.Microsecond)
 			peerConnection.Close()
+
+			time.Sleep(50000 * time.Microsecond)
 			main()
 		}
 

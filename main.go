@@ -3,6 +3,7 @@ package main
 import (
 	"FlyingDutchman/internal"
 	"fmt"
+	"syscall"
 )
 
 func main() {
@@ -31,9 +32,9 @@ func main() {
 		case "q", "quit":
 			userStateDefined = true
 			userIsDone = true
-			break
+			syscall.Exit(0)
 		case "d":
-			internal.FingerprintToPhrase("38:95:59:0a:7a:fc:8a:b4:4e:78:ae:8a:07:7f:5f:80:79:2d:39:04:f4:a3:27:e4:d2:90:63:bc:46:be:eb:4b")
+			fmt.Println(internal.FingerprintToPhrase("38:95:59:0a:7a:fc:8a:b4:4e:78:ae:8a:07:7f:5f:80:79:2d:39:04:f4:a3:27:e4:d2:90:63:bc:46:be:eb:4b"))
 
 		default:
 			fmt.Printf("Sorry, \"%s\" is not a functionnal command, please try again:\n", userResponse)

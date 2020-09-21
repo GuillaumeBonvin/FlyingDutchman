@@ -49,7 +49,7 @@ func FingerprintToString(fingerprint webrtc.DTLSFingerprint) string {
 // returns a passphrase obtained by a base change of the given fingerprint value
 func FingerprintToPhrase(fingerprint string) string {
 	// get the dictionary as an array of words from a text file
-	dictionary, err := readLines("ressources/dictionary.txt")
+	dictionary, err := readLines("ressources/big_dictionary.txt")
 	if err != nil {
 		panic(err)
 	}

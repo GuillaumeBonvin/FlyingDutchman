@@ -12,6 +12,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"time"
 )
 
 func Receiver() {
@@ -92,8 +93,9 @@ func Receiver() {
 				panic(err)
 			}
 			switch m.Type {
+			// when we receive a file offer
 			case "fileInfo":
-				fmt.Println("Received a file offer:\nName: " + m.FileName + "\nSize: " + string(m.FileSize))
+				fmt.Printf("Received a file offer:\nName: %s\nSize: %d byte\n", m.FileName, m.FileSize)
 				var userResponse string
 				fmt.Println("Type 'yes' to accept offer:")
 				fmt.Scanln(&userResponse)
@@ -123,13 +125,19 @@ func Receiver() {
 						panic(sendErr)
 					}
 				}
+			// when we receive a chunk of file, adds it to the file byte array
 			case "fileChunk":
 				rebuiltFile = append(rebuiltFile, m.Data[:]...)
+
+			// each time one 1% of all chunks have been received
 			case "mega":
 				fmt.Print("|")
+
+			// when all chunks of file have been received
 			case "fileComplete":
 				fmt.Println(" -->Download done")
 				log.Println("Integrity check")
+				// compares received filehash and generated one to confirm integrity
 				if bytes.Equal(fileHash, internal.CreateHash(rebuiltFile)) {
 					fmt.Println("File integrity confirmed! Saving file...")
 
@@ -148,7 +156,10 @@ func Receiver() {
 						panic(sendErr)
 					}
 
+					time.Sleep(50000 * time.Microsecond)
 					peerConnection.Close()
+
+					time.Sleep(50000 * time.Microsecond)
 					main()
 				}
 			}
