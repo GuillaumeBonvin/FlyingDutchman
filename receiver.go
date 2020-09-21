@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/pion/sdp/v2"
 	"github.com/pion/webrtc/v3"
 	"github.com/sacOO7/gowebsocket"
 	"io/ioutil"
@@ -32,6 +33,12 @@ func Receiver() {
 		panic(err)
 	}
 
+	// Generate your personal certificate passphrase
+	tlsFingerprints, err := peerConnection.GetConfiguration().Certificates[0].GetFingerprints()
+	fingerprint := internal.FingerprintToString(tlsFingerprints[0])
+	localPassphrase := internal.FingerprintToPhrase(fingerprint)
+	fmt.Println("Your passphrase is: " + localPassphrase)
+
 	// Set the handler for ICE connection state
 	// This will notify you when the peer has connected/disconnected
 	peerConnection.OnICEConnectionStateChange(func(connectionState webrtc.ICEConnectionState) {
@@ -53,6 +60,7 @@ func Receiver() {
 
 	// Register data channel creation handling
 	peerConnection.OnDataChannel(func(dataChannel *webrtc.DataChannel) {
+
 		log.Printf("New DataChannel %s %dataChannel\n", dataChannel.Label(), dataChannel.ID())
 
 		// Register channel opening handling
@@ -139,16 +147,11 @@ func Receiver() {
 					if sendErr != nil {
 						panic(sendErr)
 					}
+
+					peerConnection.Close()
+					main()
 				}
-
 			}
-			/*rebuiltFile = append(rebuiltFile, msg.Data[:]...)
-
-			// Convert byte array to file
-			err = ioutil.WriteFile(outputPath, rebuiltFile, 0644)
-			if err != nil {
-				panic(err)
-			}*/
 		})
 	})
 
@@ -163,22 +166,18 @@ func Receiver() {
 		Sender  string
 	}
 
-	var name string
-	fmt.Println("Enter your name:")
-	fmt.Scanln(&name)
-
 	var remote string
 
 	interrupt := make(chan os.Signal, 1)
 	signal.Notify(interrupt, os.Interrupt)
 
-	//socket := gowebsocket.New("ws://127.0.0.1:9090")
-	socket := gowebsocket.New("ws://signal.flying-dut.ch:9090")
+	socket := gowebsocket.New("ws://127.0.0.1:9090")
+	//socket := gowebsocket.New("ws://signal.flying-dut.ch:9090")
 
 	socket.OnConnected = func(socket gowebsocket.Socket) {
 		log.Println("Connected to server")
 
-		ans := Message{Type: "login", Name: name}
+		ans := Message{Type: "login", Name: localPassphrase}
 		b, err := json.Marshal(ans)
 		if err != nil {
 			panic(err)
@@ -222,14 +221,28 @@ func Receiver() {
 
 					stateDefined = true
 
-					// Set the offer as remote description
 					var encodedOffer = m.Offer
 					offer := webrtc.SessionDescription{}
 					internal.Decode(encodedOffer, &offer)
 
-					err = peerConnection.SetRemoteDescription(offer)
-					if err != nil {
+					// Checking remote certificate's fingerprint matches given passphrase
+					parsed := &sdp.SessionDescription{}
+					if err := parsed.Unmarshal([]byte(offer.SDP)); err != nil {
 						panic(err)
+					}
+					fingerprint := internal.ExtractFingerprint(parsed)
+					remotePassphrase := internal.FingerprintToPhrase(fingerprint)
+
+					// If certificate matches, set as remote description
+					if remotePassphrase == remote {
+						fmt.Println("Receiver identity confirmed!")
+						err = peerConnection.SetRemoteDescription(offer)
+						if err != nil {
+							panic(err)
+						}
+					} else {
+						fmt.Println("Receiver's certificate is not matching")
+						break
 					}
 
 					// Create an answer
@@ -271,6 +284,7 @@ func Receiver() {
 					socket.SendBinary(c)
 
 					socket.Close()
+					return
 
 				case "no", "n":
 					stateDefined = true

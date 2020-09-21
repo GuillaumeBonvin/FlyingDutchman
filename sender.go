@@ -4,6 +4,7 @@ import (
 	"FlyingDutchman/internal"
 	"encoding/json"
 	"fmt"
+	"github.com/pion/sdp/v2"
 	"github.com/pion/webrtc/v3"
 	"github.com/sacOO7/gowebsocket"
 	"io/ioutil"
@@ -29,6 +30,12 @@ func Sender() {
 	if err != nil {
 		panic(err)
 	}
+
+	// Generate your personal certificate passphrase
+	tlsFingerprints, err := peerConnection.GetConfiguration().Certificates[0].GetFingerprints()
+	fingerprint := internal.FingerprintToString(tlsFingerprints[0])
+	localPassphrase := internal.FingerprintToPhrase(fingerprint)
+	fmt.Println("Your passphrase is: " + localPassphrase)
 
 	// Create a datachannel with label 'data'
 	dataChannel, err := peerConnection.CreateDataChannel("data", nil)
@@ -59,18 +66,6 @@ func Sender() {
 	// Register channel opening handling
 	dataChannel.OnOpen(func() {
 		log.Printf("Data channel '%s'-'%d' open.\n", dataChannel.Label(), dataChannel.ID())
-
-		/*
-			limit := 32
-
-			for i := 0; i < len(file); i += limit {
-				batch := file[i:internal.Min(i+limit, len(file))]
-
-				sendErr := dataChannel.Send(batch)
-				if sendErr != nil {
-					panic(sendErr)
-				}
-			}*/
 
 	})
 
@@ -158,6 +153,8 @@ func Sender() {
 		case "received":
 			fmt.Println("File has been received successfully!")
 
+			peerConnection.Close()
+			main()
 		}
 
 	})
@@ -173,24 +170,18 @@ func Sender() {
 		Sender  string
 	}
 
-	var name string
-	fmt.Println("Enter your name:")
-	fmt.Scanln(&name)
-
 	var remote string
-	fmt.Println("Enter who you want to send to:")
-	fmt.Scanln(&remote)
 
 	interrupt := make(chan os.Signal, 1)
 	signal.Notify(interrupt, os.Interrupt)
 
-	//socket := gowebsocket.New("ws://127.0.0.1:9090")
-	socket := gowebsocket.New("ws://signal.flying-dut.ch:9090")
+	socket := gowebsocket.New("ws://127.0.0.1:9090")
+	//socket := gowebsocket.New("ws://signal.flying-dut.ch:9090")
 
 	socket.OnConnected = func(socket gowebsocket.Socket) {
 		log.Println("Connected to server")
 
-		ans := Message{Type: "login", Name: name}
+		ans := Message{Type: "login", Name: localPassphrase}
 		b, err := json.Marshal(ans)
 		if err != nil {
 			panic(err)
@@ -228,7 +219,10 @@ func Sender() {
 				// Output the answer in base64 so we can paste it in browser
 				encodedOffer := internal.Encode(*peerConnection.LocalDescription())
 
-				ans := Message{Type: "offer", Name: remote, Offer: encodedOffer, Sender: name}
+				fmt.Println("Enter your receiver's passphrase:")
+				fmt.Scanln(&remote)
+
+				ans := Message{Type: "offer", Name: remote, Offer: encodedOffer, Sender: localPassphrase}
 				b, err := json.Marshal(ans)
 				if err != nil {
 					panic(err)
@@ -268,7 +262,7 @@ func Sender() {
 			// Output the answer in base64 so we can paste it in browser
 			encodedOffer := internal.Encode(*peerConnection.LocalDescription())
 
-			ans := Message{Type: "offer", Name: remote, Offer: encodedOffer, Sender: name}
+			ans := Message{Type: "offer", Name: remote, Offer: encodedOffer, Sender: localPassphrase}
 			b, err := json.Marshal(ans)
 			if err != nil {
 				panic(err)
@@ -285,9 +279,24 @@ func Sender() {
 
 			internal.Decode(encodedAnswer, &answer)
 
-			err = peerConnection.SetRemoteDescription(answer)
-			if err != nil {
+			// Checking remote certificate's fingerprint matches given passphrase
+			parsed := &sdp.SessionDescription{}
+			if err := parsed.Unmarshal([]byte(answer.SDP)); err != nil {
 				panic(err)
+			}
+			fingerprint := internal.ExtractFingerprint(parsed)
+			remotePassphrase := internal.FingerprintToPhrase(fingerprint)
+
+			// If certificate matches, set as remote description
+			if remotePassphrase == remote {
+				fmt.Println("Receiver identity confirmed!")
+				err = peerConnection.SetRemoteDescription(answer)
+				if err != nil {
+					panic(err)
+				}
+			} else {
+				fmt.Println("Receiver's certificate is not matching")
+				break
 			}
 
 		case "leave":
@@ -299,6 +308,7 @@ func Sender() {
 			socket.SendBinary(b)*/
 
 			socket.Close()
+			return
 		}
 	}
 
@@ -329,4 +339,5 @@ func Sender() {
 			return
 		}
 	}
+
 }
