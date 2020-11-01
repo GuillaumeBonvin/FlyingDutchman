@@ -69,6 +69,7 @@ func FingerprintToPhrase(fingerprint string) string {
 	// for five runs, picks the word at index left%base and adds it to the passphrase
 	for i := 0; i < 5; i++ {
 		wordIndex := new(big.Int)
+		// wordindex = left % base
 		wordIndex.Rem(left, base)
 		word := dictionary[wordIndex.Int64()]
 

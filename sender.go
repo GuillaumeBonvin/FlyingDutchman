@@ -81,6 +81,8 @@ func Sender() {
 			panic(err)
 		}
 		switch m.Type {
+
+		// receiver sends confirmation connection is ready, waiting for a file transfer offer
 		case "ready":
 			fmt.Println("Receiver is ready for a file offer, please enter file path and name:\n" +
 				"Example - somefolder/image.png")
@@ -111,10 +113,13 @@ func Sender() {
 					panic(sendErr)
 				}
 			}
+
+			// receiver has accepted our file offer, upload can be done
 		case "accept":
 			fmt.Println("File offer accepted! Your file is being sent...")
 			log.Println("Uploading")
 
+			// sends selected file chunk by chunk
 			limit := 45000
 			for i := 0; i < len(file); i += limit {
 				batch := file[i:internal.Min(i+limit, len(file))]
@@ -134,6 +139,7 @@ func Sender() {
 					chunks = 100
 				}
 
+				// each 1%, send a notification message
 				if (i/limit)%(chunks/100) == 0 && i != 0 {
 					fmt.Print("|")
 					msg := Exchange{Type: "mega"}
@@ -157,6 +163,8 @@ func Sender() {
 			if sendErr != nil {
 				panic(sendErr)
 			}
+
+			// file has been successfully received and its integrity has been confirmed
 		case "received":
 			fmt.Println("File has been received successfully!")
 
@@ -185,9 +193,11 @@ func Sender() {
 	interrupt := make(chan os.Signal, 1)
 	signal.Notify(interrupt, os.Interrupt)
 
+	// define websocket connection to signaling server
 	socket := gowebsocket.New("ws://127.0.0.1:9090")
 	//socket := gowebsocket.New("ws://signal.flying-dut.ch:9090")
 
+	// on connection: send login info to signaling server
 	socket.OnConnected = func(socket gowebsocket.Socket) {
 		log.Println("Connected to server")
 
@@ -199,12 +209,13 @@ func Sender() {
 		socket.SendBinary(b)
 	}
 
+	// on error: dislay error message
 	socket.OnConnectError = func(err error, socket gowebsocket.Socket) {
 		log.Println("Recieved connect error ", err)
 	}
 
+	// on text message: read its content and switch between cases
 	socket.OnTextMessage = func(message string, socket gowebsocket.Socket) {
-		//log.Println("Recieved message " + message)
 		var m Message
 
 		err := json.Unmarshal([]byte(message), &m)
@@ -212,12 +223,16 @@ func Sender() {
 			panic(err)
 		}
 		switch m.Type {
+
+		// signaling server returns its login answer
 		case "login":
+			// login was successful
 			if m.Success == true {
 				log.Println("Login success")
 
+				// create a new peerConnection offer
 				offer, err := peerConnection.CreateOffer(nil)
-
+				// gather candidates
 				gatherComplete := webrtc.GatheringCompletePromise(peerConnection)
 
 				err = peerConnection.SetLocalDescription(offer)
@@ -226,12 +241,14 @@ func Sender() {
 				}
 				<-gatherComplete
 
-				// Output the answer in base64 so we can paste it in browser
+				// output the answer in base64 so we can send it
 				encodedOffer := internal.Encode(*peerConnection.LocalDescription())
 
+				// ask user for remote passphrase
 				fmt.Println("Enter your receiver's passphrase:")
 				fmt.Scanln(&remote)
 
+				// send offer to remote user connected with given passphrase
 				ans := Message{Type: "offer", Name: remote, Offer: encodedOffer, Sender: localPassphrase}
 				b, err := json.Marshal(ans)
 				if err != nil {
@@ -244,6 +261,7 @@ func Sender() {
 				log.Println("Login failed")
 			}
 
+			// remote user couldn't be found or rejected our offer
 		case "noMatch", "reject":
 
 			if m.Type == "noMatch" {
@@ -252,6 +270,7 @@ func Sender() {
 				fmt.Println("User " + remote + " rejected you offer")
 			}
 
+			// ask user for a new passphrase and repeat offer process
 			fmt.Println("Please enter new name or type 'r' to retry")
 			var userInput string
 			fmt.Scanln(&userInput)
@@ -269,7 +288,7 @@ func Sender() {
 			}
 			<-gatherComplete
 
-			// Output the answer in base64 so we can paste it in browser
+			// Output the answer in base64
 			encodedOffer := internal.Encode(*peerConnection.LocalDescription())
 
 			ans := Message{Type: "offer", Name: remote, Offer: encodedOffer, Sender: localPassphrase}
@@ -281,6 +300,7 @@ func Sender() {
 
 			log.Println("Sending offer to " + remote)
 
+			// remote user accepted our offer and sent us its answer
 		case "answer":
 			log.Println("Received answer from " + remote)
 			var encodedAnswer = m.Answer
@@ -339,6 +359,7 @@ func Sender() {
 		return
 	}
 
+	// connect to websocket connection and wait for event
 	socket.Connect()
 
 	for {

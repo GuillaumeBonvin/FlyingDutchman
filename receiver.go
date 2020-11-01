@@ -84,7 +84,6 @@ func Receiver() {
 		rebuiltFile := []byte{}
 
 		dataChannel.OnMessage(func(msg webrtc.DataChannelMessage) {
-			//fmt.Printf("Message from DataChannel '%s': '%s'\n", dataChannel.Label(), string(msg.Data))
 
 			var m Exchange
 
@@ -93,8 +92,10 @@ func Receiver() {
 				panic(err)
 			}
 			switch m.Type {
-			// when we receive a file offer
+
+			// a file offer has been received
 			case "fileInfo":
+				// display received file
 				fmt.Printf("Received a file offer:\nName: %s\nSize: %d byte\n", m.FileName, m.FileSize)
 				var userResponse string
 				fmt.Println("Type 'yes' to accept offer:")
