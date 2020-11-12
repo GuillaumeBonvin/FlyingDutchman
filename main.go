@@ -1,13 +1,23 @@
 package main
 
 import (
-	"FlyingDutchman/internal"
 	"fmt"
+	"log"
 	"syscall"
 )
 
-func main() {
-	fmt.Println("Welcome aboard, cabin boy !")
+var keepExe = true
+
+func recoverMain() {
+	if r := recover(); r != nil {
+		log.Println("An error occured!\nRecovered from ", r)
+		keepExe = true
+	}
+}
+func choseState() {
+	defer recoverMain()
+
+	fmt.Println("\nWelcome aboard, cabin boy !")
 	var userResponse string
 	var userStateDefined = false
 	var userIsDone = false
@@ -33,8 +43,6 @@ func main() {
 			userStateDefined = true
 			userIsDone = true
 			syscall.Exit(0)
-		case "d":
-			fmt.Println(internal.FingerprintToPhrase("38:95:59:0a:7a:fc:8a:b4:4e:78:ae:8a:07:7f:5f:80:79:2d:39:04:f4:a3:27:e4:d2:90:63:bc:46:be:eb:4b"))
 
 		default:
 			fmt.Printf("Sorry, \"%s\" is not a functionnal command, please try again:\n", userResponse)
@@ -42,4 +50,10 @@ func main() {
 	}
 	fmt.Println("The glowing boat disappeared in the mist...")
 
+}
+func main() {
+	for keepExe {
+		keepExe = true
+		choseState()
+	}
 }

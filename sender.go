@@ -11,7 +11,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
-	"time"
+	"syscall"
 )
 
 func Sender() {
@@ -48,6 +48,11 @@ func Sender() {
 	// This will notify you when the peer has connected/disconnected
 	peerConnection.OnICEConnectionStateChange(func(connectionState webrtc.ICEConnectionState) {
 		log.Printf("ICE Connection State has changed: %s\n", connectionState.String())
+		if connectionState.String() == "disconnected" {
+			fmt.Println("Remote user disconnected: Taking you back to main menu.")
+			peerConnection.Close()
+			main()
+		}
 	})
 
 	////////////////////////////////////////// FILE EXCHANGE PROTOCOL //////////////////////////////////////////////////
@@ -72,7 +77,6 @@ func Sender() {
 
 	// Register text message handling
 	dataChannel.OnMessage(func(msg webrtc.DataChannelMessage) {
-		//fmt.Printf("Message from DataChannel '%s': '%s'\n", dataChannel.Label(), string(msg.Data))
 
 		var m Exchange
 
@@ -86,31 +90,40 @@ func Sender() {
 		case "ready":
 			fmt.Println("Receiver is ready for a file offer, please enter file path and name:\n" +
 				"Example - somefolder/image.png")
-			var userInput string
-			fmt.Scanln(&userInput)
-			if userInput == "q" { //send leave message
-			} else {
-				filePath = userInput
-				fileStats, err = os.Stat(filePath)
-				if err != nil {
-					log.Fatal("err")
-				}
-				// Convert file to byte array
-				file, err = ioutil.ReadFile(filePath)
-				if err != nil {
-					panic(err)
-				}
-				fileHash := internal.CreateHash(file)
+			statedefined := false
+			for !statedefined {
+				var userInput string
+				fmt.Scanln(&userInput)
+				switch userInput {
+				case "q":
+					syscall.Exit(0)
+				default:
+					filePath = userInput
+					fileStats, err = os.Stat(filePath)
+					if err != nil {
+						fmt.Println("File not found, try again:")
+						break
+					}
+					// Convert file to byte array
+					file, err = ioutil.ReadFile(filePath)
+					if err != nil {
+						fmt.Println("Could not convert file, try again:")
+						break
+					}
+					fileHash := internal.CreateHash(file)
 
-				// Send all file infos
-				msg := Exchange{Type: "fileInfo", FileName: fileStats.Name(), FileSize: fileStats.Size(), Hash: fileHash}
-				m, err := json.Marshal(msg)
-				if err != nil {
-					panic(err)
-				}
-				sendErr := dataChannel.Send(m)
-				if sendErr != nil {
-					panic(sendErr)
+					// Send all file infos
+					msg := Exchange{Type: "fileInfo", FileName: fileStats.Name(), FileSize: fileStats.Size(), Hash: fileHash}
+					m, err := json.Marshal(msg)
+					if err != nil {
+						panic(err)
+					}
+					sendErr := dataChannel.Send(m)
+					if sendErr != nil {
+						panic(sendErr)
+					}
+					fmt.Println("File ready, waiting on answer...")
+					statedefined = true
 				}
 			}
 
@@ -167,12 +180,103 @@ func Sender() {
 			// file has been successfully received and its integrity has been confirmed
 		case "received":
 			fmt.Println("File has been received successfully!")
+			fmt.Println("Send another file ? ('y'/'n')")
+			newfile := ""
+			fmt.Scanln(&newfile)
+			switch newfile {
+			case "yes", "y":
+				msg := Exchange{Type: "newfile"}
+				m, err := json.Marshal(msg)
+				if err != nil {
+					panic(err)
+				}
+				sendErr := dataChannel.Send(m)
+				if sendErr != nil {
+					panic(sendErr)
+				}
+				fmt.Println("Waiting on remote user's confirmation...")
+			case "no", "n":
+				peerConnection.Close()
+				main()
+			}
+		case "reject":
+			fmt.Println("Remote user rejected your offer.\n'r' to retry, 'f' for another file, 'q' to quit:")
+			answer := ""
+			statedefined := false
+			for !statedefined {
+				fmt.Scanln(&answer)
+				switch answer {
+				case "r", "retry":
+					statedefined = true
 
-			time.Sleep(50000 * time.Microsecond)
-			peerConnection.Close()
+					fileHash := internal.CreateHash(file)
+					msg := Exchange{Type: "fileInfo", FileName: fileStats.Name(), FileSize: fileStats.Size(), Hash: fileHash}
+					m, err := json.Marshal(msg)
+					if err != nil {
+						panic(err)
+					}
+					sendErr := dataChannel.Send(m)
+					if sendErr != nil {
+						panic(sendErr)
+					}
+				case "f", "file":
+					statedefined = true
 
-			time.Sleep(50000 * time.Microsecond)
-			main()
+					var userInput string
+					fmt.Scanln(&userInput)
+					if userInput == "q" {
+						syscall.Exit(0)
+					} else {
+						filePath = userInput
+						fileStats, err = os.Stat(filePath)
+						if err != nil {
+							log.Fatal("err")
+						}
+						// Convert file to byte array
+						file, err = ioutil.ReadFile(filePath)
+						if err != nil {
+							panic(err)
+						}
+						fileHash := internal.CreateHash(file)
+
+						// Send all file infos
+						msg := Exchange{Type: "fileInfo", FileName: fileStats.Name(), FileSize: fileStats.Size(), Hash: fileHash}
+						m, err := json.Marshal(msg)
+						if err != nil {
+							panic(err)
+						}
+						sendErr := dataChannel.Send(m)
+						if sendErr != nil {
+							panic(sendErr)
+						}
+					}
+				case "q", "quit":
+					statedefined = true
+					peerConnection.Close()
+					main()
+				}
+			}
+
+		case "transferfailed":
+			fmt.Println("File has been received successfully!")
+			fmt.Println("Send another file ? ('y'/'n')")
+			newfile := ""
+			fmt.Scanln(&newfile)
+			switch newfile {
+			case "yes", "y":
+				msg := Exchange{Type: "newfile"}
+				m, err := json.Marshal(msg)
+				if err != nil {
+					panic(err)
+				}
+				sendErr := dataChannel.Send(m)
+				if sendErr != nil {
+					panic(sendErr)
+				}
+			case "no", "n":
+				peerConnection.Close()
+				main()
+			}
 		}
 
 	})
@@ -190,6 +294,10 @@ func Sender() {
 
 	var remote string
 
+	// ask user for remote passphrase
+	fmt.Println("Enter your receiver's passphrase:")
+	fmt.Scanln(&remote)
+
 	interrupt := make(chan os.Signal, 1)
 	signal.Notify(interrupt, os.Interrupt)
 
@@ -201,7 +309,7 @@ func Sender() {
 	socket.OnConnected = func(socket gowebsocket.Socket) {
 		log.Println("Connected to server")
 
-		ans := Message{Type: "login", Name: localPassphrase}
+		ans := Message{Type: "login", Name: localPassphrase + remote}
 		b, err := json.Marshal(ans)
 		if err != nil {
 			panic(err)
@@ -228,38 +336,39 @@ func Sender() {
 		case "login":
 			// login was successful
 			if m.Success == true {
-				log.Println("Login success")
+				log.Println("Login success, searching for remote user...")
 
-				// create a new peerConnection offer
-				offer, err := peerConnection.CreateOffer(nil)
-				// gather candidates
-				gatherComplete := webrtc.GatheringCompletePromise(peerConnection)
-
-				err = peerConnection.SetLocalDescription(offer)
-				if err != nil {
-					panic(err)
-				}
-				<-gatherComplete
-
-				// output the answer in base64 so we can send it
-				encodedOffer := internal.Encode(*peerConnection.LocalDescription())
-
-				// ask user for remote passphrase
-				fmt.Println("Enter your receiver's passphrase:")
-				fmt.Scanln(&remote)
-
-				// send offer to remote user connected with given passphrase
-				ans := Message{Type: "offer", Name: remote, Offer: encodedOffer, Sender: localPassphrase}
-				b, err := json.Marshal(ans)
-				if err != nil {
-					panic(err)
-				}
-				socket.SendBinary(b)
-
-				log.Println("Sending offer to " + remote)
 			} else {
 				log.Println("Login failed")
 			}
+		case "linked":
+			log.Println("Linked !")
+			// create a new peerConnection offer
+			offer, err := peerConnection.CreateOffer(nil)
+			// gather candidates
+			gatherComplete := webrtc.GatheringCompletePromise(peerConnection)
+
+			err = peerConnection.SetLocalDescription(offer)
+			if err != nil {
+				panic(err)
+			}
+
+			// Block until ICE Gathering is complete, disabling trickle ICE
+			// we do this because we only can exchange one signaling message
+			<-gatherComplete
+
+			// output the answer in base64 so we can send it
+			encodedOffer := internal.Encode(*peerConnection.LocalDescription())
+
+			// send offer to remote user connected with given passphrase
+			ans := Message{Type: "offer", Name: remote, Offer: encodedOffer, Sender: localPassphrase}
+			b, err := json.Marshal(ans)
+			if err != nil {
+				panic(err)
+			}
+			socket.SendBinary(b)
+
+			log.Println("Sending offer to " + remote)
 
 			// remote user couldn't be found or rejected our offer
 		case "noMatch", "reject":
@@ -328,15 +437,18 @@ func Sender() {
 				fmt.Println("Receiver's certificate is not matching")
 				break
 			}
-
-		case "leave":
-			/*ans := Message{Type: "leave", Name: remote}
-			b, err := json.Marshal(ans)
+			// notify and close connection
+			msg := Message{Type: "leave", Name: remote}
+			c, err := json.Marshal(msg)
 			if err != nil {
 				panic(err)
 			}
-			socket.SendBinary(b)*/
+			socket.SendBinary(c)
 
+			socket.Close()
+			return
+
+		case "leave":
 			socket.Close()
 			return
 		}

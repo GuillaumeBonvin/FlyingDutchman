@@ -12,7 +12,6 @@ import (
 	"log"
 	"os"
 	"os/signal"
-	"time"
 )
 
 func Receiver() {
@@ -44,6 +43,11 @@ func Receiver() {
 	// This will notify you when the peer has connected/disconnected
 	peerConnection.OnICEConnectionStateChange(func(connectionState webrtc.ICEConnectionState) {
 		log.Printf("ICE Connection State has changed: %s\n", connectionState.String())
+		if connectionState.String() == "disconnected" {
+			fmt.Println("Remote user disconnected: Taking you back to main menu.")
+			peerConnection.Close()
+			main()
+		}
 	})
 
 	////////////////////////////////////////// FILE EXCHANGE PROTOCOL //////////////////////////////////////////////////
@@ -100,7 +104,8 @@ func Receiver() {
 				var userResponse string
 				fmt.Println("Type 'yes' to accept offer:")
 				fmt.Scanln(&userResponse)
-				if userResponse == "yes" {
+				switch userResponse {
+				case "yes", "y":
 					log.Println("downloading")
 
 					outputPath = "out/" + m.FileName
@@ -115,7 +120,8 @@ func Receiver() {
 					if sendErr != nil {
 						panic(sendErr)
 					}
-				} else {
+
+				case "n", "no":
 					msg := Exchange{Type: "reject"}
 					m, err := json.Marshal(msg)
 					if err != nil {
@@ -125,7 +131,11 @@ func Receiver() {
 					if sendErr != nil {
 						panic(sendErr)
 					}
+
+				default:
+					fmt.Println("Unknown command, please try again:")
 				}
+
 			// when we receive a chunk of file, adds it to the file byte array
 			case "fileChunk":
 				rebuiltFile = append(rebuiltFile, m.Data[:]...)
@@ -156,13 +166,35 @@ func Receiver() {
 					if sendErr != nil {
 						panic(sendErr)
 					}
-
-					time.Sleep(50000 * time.Microsecond)
-					peerConnection.Close()
-
-					time.Sleep(50000 * time.Microsecond)
-					main()
+				} else {
+					msg := Exchange{Type: "transferfailed"}
+					m, err := json.Marshal(msg)
+					if err != nil {
+						panic(err)
+					}
+					sendErr := dataChannel.Send(m)
+					if sendErr != nil {
+						panic(sendErr)
+					}
 				}
+			case "newfile":
+				fmt.Println("Remote user wants to send you another file.")
+				fmt.Println("Keep receiving files? ('y'/'n')")
+				newfile := ""
+				fmt.Scanln(&newfile)
+				switch newfile {
+				case "yes", "y":
+					msg := Exchange{Type: "ready"}
+					m, err := json.Marshal(msg)
+					if err != nil {
+						panic(err)
+					}
+					sendErr := dataChannel.Send(m)
+					if sendErr != nil {
+						panic(sendErr)
+					}
+				}
+
 			}
 		})
 	})
@@ -179,6 +211,11 @@ func Receiver() {
 	}
 
 	var remote string
+	linked := false
+
+	// ask user for remote passphrase
+	fmt.Println("Enter your sender's passphrase:")
+	fmt.Scanln(&remote)
 
 	interrupt := make(chan os.Signal, 1)
 	signal.Notify(interrupt, os.Interrupt)
@@ -189,7 +226,7 @@ func Receiver() {
 	socket.OnConnected = func(socket gowebsocket.Socket) {
 		log.Println("Connected to server")
 
-		ans := Message{Type: "login", Name: localPassphrase}
+		ans := Message{Type: "login", Name: internal.Reverse(remote + localPassphrase)}
 		b, err := json.Marshal(ans)
 		if err != nil {
 			panic(err)
@@ -202,7 +239,6 @@ func Receiver() {
 	}
 
 	socket.OnTextMessage = func(message string, socket gowebsocket.Socket) {
-		//log.Println("Recieved message " + message)
 		var m Message
 
 		err := json.Unmarshal([]byte(message), &m)
@@ -212,107 +248,74 @@ func Receiver() {
 		switch m.Type {
 		case "login":
 			if m.Success == true {
-				log.Println("Login success")
+				log.Println("Login success, searching for remote user...")
 
 			} else {
 				log.Println("Login failed")
 			}
+		case "linked":
+			linked = true
+			log.Println("Linked !")
+
 		case "offer":
-			remote = m.Name
-
 			log.Println("Received offer from " + m.Name)
-			fmt.Println("Do you want to accept the offer? ('yes'/'no')")
-			var accept string
-			fmt.Scanln(&accept)
 
-			var stateDefined = false
-			for !stateDefined {
+			var encodedOffer = m.Offer
+			offer := webrtc.SessionDescription{}
+			internal.Decode(encodedOffer, &offer)
 
-				switch accept {
-				case "yes", "y":
-
-					stateDefined = true
-
-					var encodedOffer = m.Offer
-					offer := webrtc.SessionDescription{}
-					internal.Decode(encodedOffer, &offer)
-
-					// Checking remote certificate's fingerprint matches given passphrase
-					parsed := &sdp.SessionDescription{}
-					if err := parsed.Unmarshal([]byte(offer.SDP)); err != nil {
-						panic(err)
-					}
-					fingerprint := internal.ExtractFingerprint(parsed)
-					remotePassphrase := internal.FingerprintToPhrase(fingerprint)
-
-					// If certificate matches, set as remote description
-					if remotePassphrase == remote {
-						fmt.Println("Receiver identity confirmed!")
-						err = peerConnection.SetRemoteDescription(offer)
-						if err != nil {
-							panic(err)
-						}
-					} else {
-						fmt.Println("Receiver's certificate is not matching")
-						break
-					}
-
-					// Create an answer
-					answer, err := peerConnection.CreateAnswer(nil)
-					if err != nil {
-						panic(err)
-					}
-
-					// Create channel that is blocked until ICE Gathering is complete
-					gatherComplete := webrtc.GatheringCompletePromise(peerConnection)
-
-					// Sets the LocalDescription, and starts our UDP listeners
-					err = peerConnection.SetLocalDescription(answer)
-					if err != nil {
-						panic(err)
-					}
-
-					// Block until ICE Gathering is complete, disabling trickle ICE
-					// we do this because we only can exchange one signaling message
-					// in a production application you should exchange ICE Candidates via OnICECandidate
-					<-gatherComplete
-
-					encodedAnswer := internal.Encode(*peerConnection.LocalDescription())
-
-					ans := Message{Type: "answer", Name: remote, Answer: encodedAnswer}
-					b, err := json.Marshal(ans)
-					if err != nil {
-						panic(err)
-					}
-					socket.SendBinary(b)
-					log.Println("Sending answer to " + remote)
-
-					// notify and close connection
-					msg := Message{Type: "leave", Name: remote}
-					c, err := json.Marshal(msg)
-					if err != nil {
-						panic(err)
-					}
-					socket.SendBinary(c)
-
-					socket.Close()
-					return
-
-				case "no", "n":
-					stateDefined = true
-
-					msg := Message{Type: "reject", Name: remote}
-					c, err := json.Marshal(msg)
-					if err != nil {
-						panic(err)
-					}
-					socket.SendBinary(c)
-					fmt.Println("Waiting for another offer...")
-				default:
-					fmt.Println("Command " + accept + " is not defined, please type 'yes' to accept offer, 'no' to decline:")
-					fmt.Scanln(&accept)
-				}
+			// Checking remote certificate's fingerprint matches given passphrase
+			parsed := &sdp.SessionDescription{}
+			if err := parsed.Unmarshal([]byte(offer.SDP)); err != nil {
+				panic(err)
 			}
+			fingerprint := internal.ExtractFingerprint(parsed)
+			remotePassphrase := internal.FingerprintToPhrase(fingerprint)
+
+			// If certificate matches, set as remote description
+			if remotePassphrase == remote {
+				fmt.Println("Receiver identity confirmed!")
+				err = peerConnection.SetRemoteDescription(offer)
+				if err != nil {
+					panic(err)
+				}
+			} else {
+				fmt.Println("Receiver's certificate is not matching")
+				break
+			}
+
+			// Create an answer
+			answer, err := peerConnection.CreateAnswer(nil)
+			if err != nil {
+				panic(err)
+			}
+
+			// Create channel that is blocked until ICE Gathering is complete
+			gatherComplete := webrtc.GatheringCompletePromise(peerConnection)
+
+			// Sets the LocalDescription, and starts our UDP listeners
+			err = peerConnection.SetLocalDescription(answer)
+			if err != nil {
+				panic(err)
+			}
+
+			// Block until ICE Gathering is complete, disabling trickle ICE
+			// we do this because we only can exchange one signaling message
+			<-gatherComplete
+
+			encodedAnswer := internal.Encode(*peerConnection.LocalDescription())
+
+			ans := Message{Type: "answer", Name: remote, Answer: encodedAnswer}
+			b, err := json.Marshal(ans)
+			if err != nil {
+				panic(err)
+			}
+			socket.SendBinary(b)
+			log.Println("Sending answer to " + remote)
+
+		case "leave":
+			socket.Close()
+			return
 		}
 	}
 
